@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Autoloader manifest for the DSLD LISP tools (RPR / SCH / ADIM).
+
+  Deployment on a drafter's machine is a FOLDER COPY - no admin rights,
+  no registry editing, no APPLOAD:
+
+      %APPDATA%\Autodesk\ApplicationPlugins\DSLD-Tools.bundle\
+          PackageContents.xml
+          Contents\DSLD-Loader.lsp   (+ the three routine .lsp files)
+
+  AutoCAD scans ApplicationPlugins at startup and loads the LISP module
+  below into every drawing, exactly like the Startup Suite.  Platform /
+  Series values match the Autodesk-shipped bundles on this machine:
+  R26.0 = AutoCAD 2027, ADT = AutoCAD Architecture.  SeriesMax is set
+  high so future upgrades keep loading the tools.
+-->
+<ApplicationPackage
+  SchemaVersion="1.0"
+  AppVersion="1.0.0"
+  Author="DSLD"
+  Name="DSLD Tools"
+  Description="DSLD LISP tools: RPR roof pitch + rafters, SCH schedule of openings, ADIM auto-dimension"
+  ProductCode="{a946de65-690c-499f-a6b8-75e0d57b1a78}"
+  UpgradeCode="{27f7300e-326d-479f-be8a-8d63035500f2}"
+  >
+  <CompanyDetails Name="DSLD" Url="" Email="" />
+
+  <RuntimeRequirements
+      Platform="AutoCAD|ADT"
+      SeriesMin="R26.0"
+      SeriesMax="R30.0"
+      OS="Win64"
+      SupportPath="./Contents" />
+
+  <Components>
+    <ComponentEntry
+        AppName="DSLDTools"
+        ModuleName="./Contents/DSLD-Loader.lsp"
+        AppDescription="Loads the DSLD RPR / SCH / ADIM LISP tools in every drawing"
+        LoadOnAutoCADStartup="True" />
+  </Components>
+
+  <DisplayInAppManager>false</DisplayInAppManager>
+</ApplicationPackage>

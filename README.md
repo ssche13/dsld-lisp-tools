@@ -11,13 +11,27 @@ Architecture:
 
 ## Install (drafter machine)
 
-1. Download `DSLD-Tools.zip` (emailed) **or** Code → Download ZIP here.
-2. Extract, then copy the `DSLD-Tools.bundle` folder into
-   `%APPDATA%\Autodesk\ApplicationPlugins` (create the folder if missing).
-3. Restart AutoCAD Architecture. The tools now load in every drawing —
-   the command line shows `[DSLD] Tools bundle ... loaded.`
+**Easiest — one emailed file, needs internet:**
 
-No admin rights, no support-path setup, no APPLOAD.
+1. Save the emailed `DSLD-INSTALL.lsp` anywhere (Desktop is fine).
+   (If email blocks `.lsp`, it arrives renamed `DSLD-INSTALL.txt` —
+   rename it back to `.lsp` first.)
+2. Drag it into any open drawing (or `APPLOAD` → pick it). Click
+   **Load** if AutoCAD asks about an untrusted location.
+3. It downloads the bundle from this repo into
+   `%APPDATA%\Autodesk\ApplicationPlugins` by itself. The tools work
+   immediately in that drawing; after one AutoCAD restart they load in
+   every drawing. The installer file can then be deleted.
+
+**Offline machine — USB stick:**
+
+1. Copy the `DSLD-Tools.bundle` folder (from this repo or
+   `DSLD-Tools.zip`) into `%APPDATA%\Autodesk\ApplicationPlugins`
+   (create the folder if missing).
+2. Restart AutoCAD Architecture — the command line shows
+   `[DSLD] Tools bundle ... loaded.`
+
+No admin rights, no support-path setup, no APPLOAD after install.
 
 ## Updates
 

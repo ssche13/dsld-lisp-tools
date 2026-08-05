@@ -43,6 +43,31 @@
   (if (setq f (open path "w"))
     (progn (princ s f) (close f) T)))
 
+;; GET url and save the raw bytes to path (ADODB.Stream) - used for
+;; the SchTagNet .NET add-in, which must arrive byte-exact.
+(defun dsldi:download-binary (url path / xml ok)
+  (vl-catch-all-apply
+    (function
+      (lambda ( / stream)
+        (setq xml (vlax-create-object "WinHttp.WinHttpRequest.5.1"))
+        (vlax-invoke-method xml 'SetTimeouts 3000 3000 3000 30000)
+        (vlax-invoke-method xml 'Open "GET" url :vlax-false)
+        (vlax-invoke-method xml 'Send)
+        (if (= 200 (vlax-get-property xml 'Status))
+          (progn
+            (setq stream (vlax-create-object "ADODB.Stream"))
+            (vlax-put-property stream 'Type 1)      ; binary
+            (vlax-invoke-method stream 'Open)
+            (vlax-invoke-method stream 'Write
+              (vlax-get-property xml 'ResponseBody))
+            (vlax-invoke-method stream 'SaveToFile path 2) ; overwrite
+            (vlax-invoke-method stream 'Close)
+            (vlax-release-object stream)
+            (setq ok T)))))
+    nil)
+  (if xml (vl-catch-all-apply 'vlax-release-object (list xml)))
+  ok)
+
 (defun dsldi:install ( / appdata root bundle contents specs body fails)
   (setq appdata (getenv "APPDATA"))
   (cond
@@ -92,6 +117,25 @@
          (t
           (princ "WRITE FAILED (file in use?)")
           (setq fails (1+ fails)))))
+     ;; binary payloads: the SchTagNet schedule-tag add-in
+     (foreach spec
+       (list
+         (list "Contents/SchTagNet.dll"
+               (strcat contents "\\SchTagNet.dll") 10000)
+         (list "Contents/SchTagNet.deps.json"
+               (strcat contents "\\SchTagNet.deps.json") 100)
+         (list "Contents/SchTagNet.runtimeconfig.json"
+               (strcat contents "\\SchTagNet.runtimeconfig.json") 100))
+       (princ (strcat "\n[DSLD-INSTALL] downloading " (car spec) " ... "))
+       (cond
+         ((and (dsldi:download-binary (strcat *dsldi:raw-base* (car spec))
+                                      (cadr spec))
+               (vl-file-size (cadr spec))
+               (> (vl-file-size (cadr spec)) (caddr spec)))
+          (princ "ok"))
+         (t
+          (princ "FAILED")
+          (setq fails (1+ fails)))))
      (cond
        ((> fails 0)
         (princ (strcat "\n[DSLD-INSTALL] " (itoa fails)
@@ -99,7 +143,8 @@
        (t
         (load (strcat contents "\\DSLD-Loader.lsp"))
         (princ "\n[DSLD-INSTALL] Done.  RPR / SCH / ADIM are live in THIS drawing now.")
-        (princ "\n[DSLD-INSTALL] Restart AutoCAD once and they will load in EVERY drawing automatically.")
+        (princ "\n[DSLD-INSTALL] Restart AutoCAD once and they will load in EVERY drawing")
+        (princ "\n               automatically (the SCHTAG tag placer needs that restart too).")
         (princ "\n[DSLD-INSTALL] You can delete the DSLD-INSTALL.lsp file - it is no longer needed.")))))
   (princ))
 

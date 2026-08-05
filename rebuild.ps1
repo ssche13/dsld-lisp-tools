@@ -14,6 +14,13 @@ Copy-Item "E:\Megans RPR lisp\roof-pitch-rafters.lsp" $contents -Force
 Copy-Item "E:\Megans lisp routines\SCH.lsp"           $contents -Force
 Copy-Item "E:\ADIM lisp\ADIM.lsp"                     $contents -Force
 
+# SchTagNet (.NET schedule-tag add-in) - released builds live in the
+# dev bundle next to SCH.lsp
+$schtag = "E:\Megans lisp routines\SchTagNet.bundle\Contents"
+Copy-Item "$schtag\SchTagNet.dll"                     $contents -Force
+Copy-Item "$schtag\SchTagNet.deps.json"               $contents -Force
+Copy-Item "$schtag\SchTagNet.runtimeconfig.json"      $contents -Force
+
 # 2. re-zip (bundle + plain-text install steps; only .lsp/.xml/.txt
 #    inside, so Gmail accepts the attachment)
 $zip = Join-Path $root "DSLD-Tools.zip"

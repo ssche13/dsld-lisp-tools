@@ -8,6 +8,7 @@ Architecture:
 | `RPR...` | `roof-pitch-rafters.lsp` | Roof pitch + rafter layout with H/R/V chart, live grip-edit mode (`RPRHELP`) |
 | `SCH...` | `SCH.lsp` | Door/window Schedule of Openings auto-fill from ACA objects (`SCHHELP`) |
 | `ADIM...` | `ADIM.lsp` | Automatic plan dimensioning (`ADIMHELP`) |
+| `SCHTAG...` | `SchTagNet.dll` | .NET add-in that places DSLD door/window callouts as real ACA schedule tags (demand-loads on first use) |
 
 ## Install (drafter machine)
 
@@ -44,12 +45,16 @@ No admin rights, no support-path setup, no APPLOAD after install.
 ```
 DSLD-Tools.bundle/
   PackageContents.xml        AutoCAD plug-in AutoLoader manifest
+                             (LISP loader + SchTagNet demand-load entry)
   Contents/
     DSLD-Loader.lsp          loads the three routines per drawing,
                              defines DSLDUPDATE / DSLDRELOAD
     roof-pitch-rafters.lsp
     SCH.lsp
     ADIM.lsp
+    SchTagNet.dll            .NET schedule-tag placer (SCHTAG commands)
+    SchTagNet.deps.json
+    SchTagNet.runtimeconfig.json
 ```
 
 ## Maintainer notes (dev machine)
@@ -59,6 +64,9 @@ The master sources live outside this repo:
 - `E:\Megans RPR lisp\roof-pitch-rafters.lsp`
 - `E:\Megans lisp routines\SCH.lsp`
 - `E:\ADIM lisp\ADIM.lsp`
+- `E:\Megans lisp routines\SchTagNet.bundle\Contents\` (released
+  SchTagNet builds; the SchTagNet dev loop may install its own
+  standalone bundle for testing — treat the copy here as the release)
 
 After editing a master, run `rebuild.ps1` — it copies the masters into
 the bundle, re-zips `DSLD-Tools.zip` for email, refreshes the local

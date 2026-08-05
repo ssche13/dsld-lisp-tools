@@ -17,7 +17,7 @@
 -->
 <ApplicationPackage
   SchemaVersion="1.0"
-  AppVersion="1.0.0"
+  AppVersion="1.1.0"
   Author="DSLD"
   Name="DSLD Tools"
   Description="DSLD LISP tools: RPR roof pitch + rafters, SCH schedule of openings, ADIM auto-dimension"
@@ -39,6 +39,31 @@
         ModuleName="./Contents/DSLD-Loader.lsp"
         AppDescription="Loads the DSLD RPR / SCH / ADIM LISP tools in every drawing"
         LoadOnAutoCADStartup="True" />
+    <!-- SchTagNet: the .NET schedule-tag placer SCH.lsp drives.
+         LoadOnRequest = the DLL loads the first time a SCHTAG command
+         is typed, so it costs nothing until used.  Folded in from the
+         standalone SchTagNet.bundle so drafters get it (and its
+         updates) with everything else - no SCHTAGINSTALL needed. -->
+    <ComponentEntry
+        AppName="SchTagNet"
+        ModuleName="./Contents/SchTagNet.dll"
+        AppDescription="DSLD schedule tag placer"
+        LoadOnAutoCADStartup="false"
+        LoadOnRequest="true">
+      <AssemblyMappings>
+        <AssemblyMappingFolder Path="./Contents" />
+      </AssemblyMappings>
+      <Commands GroupName="SCHTAG">
+        <Command Global="SCHTAGPING"  Local="SCHTAGPING"  />
+        <Command Global="SCHTAGAPI"   Local="SCHTAGAPI"   />
+        <Command Global="SCHTAGSPIKE" Local="SCHTAGSPIKE" />
+        <Command Global="SCHTAGCMD"   Local="SCHTAGCMD"   />
+        <Command Global="SCHTAGDRY"   Local="SCHTAGDRY"   />
+        <Command Global="SCHTAG"      Local="SCHTAG"      />
+        <Command Global="SCHTAGVIEW"  Local="SCHTAGVIEW"  />
+        <Command Global="SCHTAGCLICK" Local="SCHTAGCLICK" />
+      </Commands>
+    </ComponentEntry>
   </Components>
 
   <DisplayInAppManager>false</DisplayInAppManager>

@@ -18,10 +18,14 @@
 ;;; ===================================================================
 (vl-load-com)
 
-(setq *dsld:bundle-version* "1.0.0")
+(setq *dsld:bundle-version* "1.1.0")
 (setq *dsld:raw-base*
   "https://raw.githubusercontent.com/ssche13/dsld-lisp-tools/main/DSLD-Tools.bundle/Contents/")
 (setq *dsld:files* '("roof-pitch-rafters.lsp" "SCH.lsp" "ADIM.lsp"))
+;; binary payloads (SchTagNet .NET schedule-tag add-in) - fetched
+;; byte-exact, never through the text path
+(setq *dsld:binfiles*
+  '("SchTagNet.dll" "SchTagNet.deps.json" "SchTagNet.runtimeconfig.json"))
 
 ;; The bundle's Contents folder: per-user install first, then the
 ;; all-users location.  nil when neither exists.
@@ -111,8 +115,52 @@
   (if (setq f (open path "w"))
     (progn (princ s f) (close f) T)))
 
-(defun c:DSLDUPDATE ( / dir p body n-new n-same n-fail)
-  (setq n-new 0 n-same 0 n-fail 0)
+;; HEAD url -> Content-Length as an integer, nil on any failure.
+;; Cheap staleness probe for binary files (no LISP-side byte compare).
+(defun dsld:remote-size (url / xml n)
+  (vl-catch-all-apply
+    (function
+      (lambda ( / s)
+        (setq xml (vlax-create-object "WinHttp.WinHttpRequest.5.1"))
+        (vlax-invoke-method xml 'SetTimeouts 2000 2000 2000 8000)
+        (vlax-invoke-method xml 'Open "HEAD" url :vlax-false)
+        (vlax-invoke-method xml 'Send)
+        (if (= 200 (vlax-get-property xml 'Status))
+          (progn
+            (setq s (vlax-invoke-method xml 'GetResponseHeader "Content-Length"))
+            (if (and s (numberp (read s))) (setq n (read s)))))))
+    nil)
+  (if xml (vl-catch-all-apply 'vlax-release-object (list xml)))
+  n)
+
+;; GET url and save the raw bytes to path (ADODB.Stream, so the DLL
+;; arrives byte-exact).  T on success.  Fails when AutoCAD has the DLL
+;; loaded and locked - caller reports "restart and rerun".
+(defun dsld:download-binary (url path / xml ok)
+  (vl-catch-all-apply
+    (function
+      (lambda ( / stream)
+        (setq xml (vlax-create-object "WinHttp.WinHttpRequest.5.1"))
+        (vlax-invoke-method xml 'SetTimeouts 3000 3000 3000 30000)
+        (vlax-invoke-method xml 'Open "GET" url :vlax-false)
+        (vlax-invoke-method xml 'Send)
+        (if (= 200 (vlax-get-property xml 'Status))
+          (progn
+            (setq stream (vlax-create-object "ADODB.Stream"))
+            (vlax-put-property stream 'Type 1)      ; binary
+            (vlax-invoke-method stream 'Open)
+            (vlax-invoke-method stream 'Write
+              (vlax-get-property xml 'ResponseBody))
+            (vlax-invoke-method stream 'SaveToFile path 2) ; overwrite
+            (vlax-invoke-method stream 'Close)
+            (vlax-release-object stream)
+            (setq ok T)))))
+    nil)
+  (if xml (vl-catch-all-apply 'vlax-release-object (list xml)))
+  ok)
+
+(defun c:DSLDUPDATE ( / dir p url body rsize n-new n-same n-fail n-bin)
+  (setq n-new 0 n-same 0 n-fail 0 n-bin 0)
   (setq dir (dsld:dir))
   (cond
     ((null dir) (princ "\n[DSLD] Bundle folder not found."))
@@ -141,11 +189,34 @@
             (t
              (princ "write failed (file locked?)")
              (setq n-fail (1+ n-fail)))))))
+     ;; SchTagNet binaries: HEAD size-compare is the staleness probe
+     ;; (a rebuilt DLL virtually never keeps the same byte count; when
+     ;; in doubt DSLDUPDATE again after a restart forces nothing extra)
+     (foreach name *dsld:binfiles*
+       (setq p   (strcat dir "\\" name)
+             url (strcat *dsld:raw-base* name))
+       (princ (strcat "\n[DSLD] " name " ... "))
+       (setq rsize (dsld:remote-size url))
+       (cond
+         ((null rsize)
+          (princ "FETCH FAILED (no internet / GitHub unreachable?)")
+          (setq n-fail (1+ n-fail)))
+         ((and (findfile p) (= rsize (vl-file-size p)))
+          (princ "already up to date")
+          (setq n-same (1+ n-same)))
+         ((dsld:download-binary url p)
+          (princ "UPDATED")
+          (setq n-bin (1+ n-bin)))
+         (t
+          (princ "write failed (AutoCAD is holding the add-in - restart CAD, then DSLDUPDATE again)")
+          (setq n-fail (1+ n-fail)))))
      (if (> n-new 0) (dsld:load-all))
-     (princ (strcat "\n[DSLD] Update done: " (itoa n-new) " updated, "
+     (princ (strcat "\n[DSLD] Update done: " (itoa (+ n-new n-bin)) " updated, "
                     (itoa n-same) " current, " (itoa n-fail) " failed."))
      (if (> n-new 0)
-       (princ "\n[DSLD] New code is live in THIS drawing; reopen other drawings to pick it up."))))
+       (princ "\n[DSLD] New LISP code is live in THIS drawing; reopen other drawings to pick it up."))
+     (if (> n-bin 0)
+       (princ "\n[DSLD] SchTagNet add-in updated - it takes effect after the next AutoCAD restart."))))
   (princ))
 
 (defun c:DSLDRELOAD ( ) (dsld:load-all))

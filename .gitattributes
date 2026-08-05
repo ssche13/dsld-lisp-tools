@@ -1,0 +1,5 @@
+# Binary payloads must round-trip byte-exact through GitHub raw -
+# DSLDUPDATE compares the local file size to Content-Length, so no
+# line-ending normalization is allowed on these.
+*.dll binary
+*.json -text

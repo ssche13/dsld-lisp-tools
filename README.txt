@@ -6,6 +6,8 @@ WHAT YOU GET (loaded automatically in every drawing):
   SCH    - door/window Schedule of Openings auto-fill    (help: SCHHELP)
   ADIM   - automatic plan dimensioning                   (help: ADIMHELP)
   SCHTAG - schedule-tag placer add-in used by the SCH workflow
+           (not inside this zip - mail filters block DLL files;
+           type DSLDUPDATE once while online and it downloads itself)
   DSLDUPDATE - downloads the newest version of everything from GitHub
   DSLDRELOAD - reloads the LISP tools without restarting CAD
 

@@ -26,11 +26,17 @@ Architecture:
 
 **Offline machine — USB stick:**
 
-1. Copy the `DSLD-Tools.bundle` folder (from this repo or
-   `DSLD-Tools.zip`) into `%APPDATA%\Autodesk\ApplicationPlugins`
-   (create the folder if missing).
+1. Copy the `DSLD-Tools.bundle` folder **from this repo** into
+   `%APPDATA%\Autodesk\ApplicationPlugins` (create the folder if
+   missing). The repo copy is complete, including SchTagNet.
 2. Restart AutoCAD Architecture — the command line shows
    `[DSLD] Tools bundle ... loaded.`
+
+Note: `DSLD-Tools.zip` (the email fallback) is deliberately
+**LISP-only** — mail filters block `.dll` even inside archives, so the
+SchTagNet tag placer is excluded from it and arrives via the machine's
+first `DSLDUPDATE` instead. GitHub is the only channel that carries
+the binaries.
 
 No admin rights, no support-path setup, no APPLOAD after install.
 

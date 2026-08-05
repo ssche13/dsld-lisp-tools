@@ -21,11 +21,21 @@ Copy-Item "$schtag\SchTagNet.dll"                     $contents -Force
 Copy-Item "$schtag\SchTagNet.deps.json"               $contents -Force
 Copy-Item "$schtag\SchTagNet.runtimeconfig.json"      $contents -Force
 
-# 2. re-zip (bundle + plain-text install steps; only .lsp/.xml/.txt
-#    inside, so Gmail accepts the attachment)
+# 2. re-zip the EMAIL FALLBACK - LISP-only on purpose. Mail filters
+#    (Gmail and most corporate gateways) block .dll even inside
+#    archives, so SchTagNet is deliberately excluded here; it reaches
+#    zip-installed machines via their first DSLDUPDATE instead.
+#    GitHub is the only channel that carries the binaries.
 $zip = Join-Path $root "DSLD-Tools.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path (Join-Path $root "DSLD-Tools.bundle"), (Join-Path $root "README.txt") -DestinationPath $zip
+$stage = Join-Path $env:TEMP "DSLD-Tools-zipstage"
+if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+New-Item -ItemType Directory "$stage\DSLD-Tools.bundle\Contents" -Force | Out-Null
+Copy-Item (Join-Path $root "DSLD-Tools.bundle\PackageContents.xml") "$stage\DSLD-Tools.bundle\"
+Copy-Item (Join-Path $root "DSLD-Tools.bundle\Contents\*.lsp") "$stage\DSLD-Tools.bundle\Contents\"
+Copy-Item (Join-Path $root "README.txt") $stage
+Compress-Archive -Path "$stage\DSLD-Tools.bundle", "$stage\README.txt" -DestinationPath $zip
+Remove-Item $stage -Recurse -Force
 
 # 3. refresh the local install
 $dest = Join-Path $env:APPDATA "Autodesk\ApplicationPlugins"

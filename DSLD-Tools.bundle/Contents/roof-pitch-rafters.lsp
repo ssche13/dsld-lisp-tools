@@ -54,6 +54,12 @@
 (setq *DSLD-RPR-BELL-RUN-MIN*   4)           ; min consecutive to be a bell
 (setq *DSLD-RPR-BELL-MID-TOL*   12.0)        ; midpoint alignment tol (in.)
 (setq *DSLD-RPR-BELL-LEN-TOL*   6.0)         ; length similarity tol (in.)
+;; v1.9.17: a perimeter short-run is only DISCARDED when its pieces are
+;; tiny (true drip-edge stubs).  Runs of substantial short pieces are
+;; BELL RAFTERS -- real lumber, drawn as their own split pieces and
+;; counted in the chart.  Before this, every bell run was silently
+;; dropped along with the drip edge.
+(setq *DSLD-RPR-DRIP-MAX-LEN*   8.0)         ; discard-if-shorter (in.)
 ;; H/R/V edge-pairing tolerance (v1.9.11).  Two regions' edges must be
 ;; collinear within this to earn a shared-edge callout.  Deliberately
 ;; LOOSER than GAP-TOL: grip-nudging one region's vertex separates its
@@ -101,7 +107,7 @@
 ;; file load is gated by *DSLD-RPR-AUTOUPDATE* (default T); set it to
 ;; nil in your acaddoc.lsp to disable.  c:RPRUPDATE forces a manual
 ;; check at any time.
-(setq *DSLD-RPR-VERSION*    "1.9.16")
+(setq *DSLD-RPR-VERSION*    "1.9.17")
 (setq *DSLD-RPR-AUTOUPDATE* T)
 (setq *DSLD-RPR-GITHUB-RAW-URL*
   "https://raw.githubusercontent.com/ssche13/dsld-lisp-tools/main/DSLD-Tools.bundle/Contents/roof-pitch-rafters.lsp")
@@ -978,6 +984,36 @@
       (entmake rec)))
   new-name)
 
+;; Mark a layer NON-PLOTTING (v1.9.17) -- Defpoints behavior under its
+;; own name.  The slope outlines and the rafter-count chart are working
+;; geometry the designer keeps on screen, but they must never reach the
+;; printed sheet.  We set the layer's Plottable flag instead of moving
+;; entities onto the literal Defpoints layer: scan rediscovery, the
+;; layer-filtered wipes, and the H/R/V machinery all select by these
+;; layer names, and Defpoints would break every one of them.
+(defun dsld-rpr-ensure-noplot (lay-name)
+  (vl-catch-all-apply
+    '(lambda ( / lo)
+       (setq lo (vla-Item
+                  (vla-get-layers
+                    (vla-get-activedocument (vlax-get-acad-object)))
+                  lay-name))
+       (if (= (vla-get-plottable lo) :vlax-true)
+         (vla-put-plottable lo :vlax-false))))
+  lay-name)
+
+;; Every RPR-generated layer that must never plot: the traced slope
+;; outlines (per-scan RPR<N> layers), the color fills, the overlap
+;; warnings, and the rafter-count chart.  Rafters, length labels, pitch
+;; labels and H/R/V callouts stay plottable -- they ARE the deliverable.
+(defun dsld-rpr-apply-noplot ( / s)
+  (dsld-rpr-ensure-noplot *DSLD-RPR-CHART-LAYER*)
+  (dsld-rpr-ensure-noplot *DSLD-RPR-FILL-LAYER*)
+  (dsld-rpr-ensure-noplot *DSLD-RPR-OVERLAP-LAYER*)
+  (if *DSLD-RPR-POLY-LAYER* (dsld-rpr-ensure-noplot *DSLD-RPR-POLY-LAYER*))
+  (foreach s *DSLD-RPR-SCANS*
+    (dsld-rpr-ensure-noplot (nth 4 s))))
+
 ;; Run BPOLY at a point.  Retries with escalating gap tolerances and
 ;; small perpendicular offsets if the first attempt fails -- some
 ;; drawings have wider gaps in the roof structure than the default
@@ -1708,6 +1744,267 @@
          (setq holes (cons p holes))))))
   holes)
 
+;; Shoelace area of a raw 2D vertex list (no entity needed).
+(defun dsld-rpr-pts-area (pts / n i a b s)
+  (setq n (length pts) i 0 s 0.0)
+  (while (< i n)
+    (setq a (nth i pts) b (nth (rem (1+ i) n) pts))
+    (setq s (+ s (- (* (car a) (cadr b)) (* (car b) (cadr a)))))
+    (setq i (1+ i)))
+  (abs (/ s 2.0)))
+
+;;-----------------------------------------------------------------------;;
+;; Auto-capture dashed dormer holes (v1.9.17)
+;;-----------------------------------------------------------------------;;
+;; Field: "rafters are not breaking at our dormers."  Diagnosis on the
+;; real roof showed the clip chain is sound for every TRACED sub-region
+;; -- the leak-through dormers are the ones that never became regions:
+;; under-roof strips bounded by DASHED lines with no pitch callout
+;; inside, invisible to the scan (dashes are hidden while tracing) and
+;; never clicked in the missed-area loop.  RPR cannot break around a
+;; hole it does not know exists.
+;;
+;; So: after regions are finalized, chain the HIDDEN dashed segments
+;; that lie fully inside each region into loops (same chainer the
+;; region-boolean rescue uses).  A CLOSED loop of sane size becomes a
+;; sub-region automatically -- pitch from a callout inside it if there
+;; is one, else the parent's -- and from then on every existing rule
+;; applies: parent rafters break around it, its own rafters fill it,
+;; net SF excludes it.
+;;
+;; Guards keep framing clutter out: the loop must close (chain returns
+;; to its start), carry 3+ vertices, cover 0.5%..60% of the parent, and
+;; not duplicate a region that already exists.  Loose dashed clutter
+;; does not close into loops.
+(defun dsld-rpr-auto-dashed-holes (traced hidden-dashed picks-info /
+        segs pair e ed pp parent ppitch parea inside s loops lperr lp n
+        lparea dup r hpitch pk new-poly out done-mids mid m)
+  (if (not *DSLD-RPR-POLY-LAYER*)      ; no scan bound -- nothing to do
+    (setq traced nil))
+  (setq out '() done-mids '())
+  ;; dashed LINE segments from the hidden set, as ((x y) (x y))
+  (setq segs '())
+  (foreach pair hidden-dashed
+    (setq e (car pair))
+    (cond
+      ((not (entget e)) nil)
+      (T
+       (setq ed (entget e))
+       (if (= (cdr (assoc 0 ed)) "LINE")
+         (setq segs (cons (list (cdr (assoc 10 ed)) (cdr (assoc 11 ed)))
+                          segs))))))
+  (foreach pp traced
+    (setq parent (car pp) ppitch (cadr pp))
+    (cond
+      ((not (entget parent)) nil)
+      (T
+       (setq parea (dsld-rpr-poly-area-flat parent))
+       ;; segments fully inside this parent
+       (setq inside '())
+       (foreach s segs
+         (if (and (dsld-rpr-pt-in-poly (car s) parent)
+                  (dsld-rpr-pt-in-poly (cadr s) parent))
+           (setq inside (cons s inside))))
+       (cond
+         ((< (length inside) 3) nil)
+         (T
+          (setq lperr (vl-catch-all-apply 'dsld-rpr-chain-segs->loops
+                                          (list inside)))
+          (setq loops (if (vl-catch-all-error-p lperr) nil lperr))
+          (foreach lp loops
+            ;; chain-segs->loops returns ONLY closed loops, with the
+            ;; duplicate closing vertex already dropped
+            (cond
+              ((< (length lp) 3) nil)
+              (T
+               (setq n (length lp))
+               (setq lparea (dsld-rpr-pts-area lp))
+               (setq mid (list (/ (apply '+ (mapcar 'car lp)) n)
+                               (/ (apply '+ (mapcar 'cadr lp)) n)))
+               ;; one capture per physical loop, even if two parents
+               ;; both contain it (nested regions)
+               (setq dup nil)
+               (foreach m done-mids
+                 (if (< (distance m mid) 6.0) (setq dup T)))
+               ;; a region that already covers this loop at ~this size
+               (foreach r (mapcar 'car traced)
+                 (if (and (not dup) (entget r)
+                          (< (abs (- (dsld-rpr-poly-area-flat r) lparea))
+                             (* 0.15 (max lparea 1.0)))
+                          (dsld-rpr-pt-in-poly mid r))
+                   (setq dup T)))
+               (cond
+                 (dup nil)
+                 ((< lparea (* 0.005 parea)) nil)   ; clutter-tiny
+                 ((> lparea (* 0.60  parea)) nil)   ; not a sub-area
+                 (T
+                  ;; pitch: a callout inside the loop wins; else parent
+                  (setq hpitch ppitch)
+                  (foreach pk picks-info
+                    (if (and (car pk)
+                             (dsld-rpr-pt-in-poly-pts (car pk) lp))
+                      (setq hpitch (cadr pk))))
+                  (setq new-poly
+                        (dsld-rpr-make-lwpoly lp *DSLD-RPR-POLY-LAYER*))
+                  (cond
+                    (new-poly
+                     (dsld-rpr-tag-pitch new-poly hpitch)
+                     (dsld-rpr-tint-poly new-poly)
+                     (setq done-mids (cons mid done-mids))
+                     (setq out (cons (list new-poly hpitch) out))
+                     (dsld-rpr-dbg
+                       (strcat "auto-hole: captured "
+                               (rtos lparea 2 0) " sqin at ("
+                               (rtos (car mid) 2 0) ","
+                               (rtos (cadr mid) 2 0) ") pitch "
+                               (rtos hpitch 2 1)))))))))))))))
+  (reverse out))
+
+;; Second automatic dormer pass (v1.9.17): BPOLY at each dashed CLUSTER.
+;; The loop-chainer above only catches dormers whose boundary is 100%
+;; dashed.  Real dormers usually borrow one side from the parent's
+;; SOLID edge (the eave), so the dashed segments alone never close.
+;; BPOLY doesn't care -- it sees the restored dashes AND the solid roof
+;; linework together.  So: group the hidden dashed segments into
+;; connected clusters, and for each sane-sized cluster inside a traced
+;; region, BPOLY at its center exactly as a user's missed-area click
+;; would.  Every existing guard applies (flood/duplicate rejection).
+;; CALLER must have the dashed linework RESTORED (visible) around the
+;; call -- same dance as missed-area pass 2b.
+(defun dsld-rpr-auto-dormer-bpoly (traced hidden-dashed picks-info
+                                   roof-lay-filter /
+        segs pair e ed clusters cl seed grow found s pt out pp parent
+        ppitch parea bx by bw bh cx cy hit region attempts hpitch pk
+        rarea done tries try-pts tp)
+  (setq out '())
+  ;; dashed segments as endpoint pairs
+  (setq segs '())
+  (foreach pair hidden-dashed
+    (setq e (car pair))
+    (cond
+      ((not (entget e)) nil)
+      (T
+       (setq ed (entget e))
+       (if (= (cdr (assoc 0 ed)) "LINE")
+         (setq segs (cons (list (cdr (assoc 10 ed)) (cdr (assoc 11 ed)))
+                          segs))))))
+  ;; connected clusters (endpoints within 12")
+  (setq clusters '())
+  (while segs
+    (setq seed (car segs) segs (cdr segs))
+    (setq cl (list seed) grow T)
+    (while grow
+      (setq grow nil)
+      (setq found '())
+      (foreach s segs
+        (setq hit nil)
+        (foreach e cl
+          (if (and (not hit)
+                   (or (< (distance (car s) (car e)) 12.0)
+                       (< (distance (car s) (cadr e)) 12.0)
+                       (< (distance (cadr s) (car e)) 12.0)
+                       (< (distance (cadr s) (cadr e)) 12.0)))
+            (setq hit T)))
+        (if hit
+          (progn (setq cl (cons s cl)) (setq grow T))
+          (setq found (cons s found))))
+      (setq segs (reverse found)))
+    (if (>= (length cl) 3) (setq clusters (cons cl clusters))))
+  (dsld-rpr-dbg (strcat "auto-dormer-bpoly: " (itoa (length clusters))
+                        " dashed cluster(s)"))
+  (setq attempts 0)
+  (foreach cl clusters
+    ;; cluster bbox
+    (setq bx nil)
+    (foreach s cl
+      (foreach pt s
+        (cond
+          ((not bx) (setq bx (car pt) by (cadr pt)
+                          bw (car pt) bh (cadr pt)))
+          (T (setq bx (min bx (car pt)) by (min by (cadr pt))
+                   bw (max bw (car pt)) bh (max bh (cadr pt)))))))
+    (setq cx (/ (+ bx bw) 2.0) cy (/ (+ by bh) 2.0))
+    ;; must be dormer-scaled and sit inside a traced region
+    (setq parent nil)
+    (foreach pp traced
+      (if (and (not parent) (entget (car pp))
+               (dsld-rpr-pt-in-poly (list cx cy) (car pp)))
+        (setq parent pp)))
+    (cond
+      ((< (- bw bx) 24.0) nil)                    ; too narrow
+      ((< (- bh by) 24.0) nil)
+      ((not parent) nil)                          ; not under a slope
+      ((>= attempts 40) nil)                      ; runaway guard
+      (T
+       (setq parea (dsld-rpr-poly-area-flat (car parent)))
+       (setq ppitch (cadr parent))
+       (cond
+         ((> (* (- bw bx) (- bh by)) (* 0.6 parea)) nil)  ; not a sub-area
+         (T
+          (setq attempts (1+ attempts))
+          ;; center may sit ON an interior brace line -- try offsets
+          (setq try-pts (list (list cx cy)
+                              (list (+ cx 6.0) (+ cy 6.0))
+                              (list (- cx 6.0) (+ cy 6.0))
+                              (list (+ cx 6.0) (- cy 6.0))))
+          (setq region nil)
+          (foreach tp try-pts
+            (if (not region)
+              (progn
+                (setq region (dsld-rpr-bpoly-auto-close tp roof-lay-filter))
+                (if (and region
+                         (dsld-rpr-missed-region-bad-p
+                           region (* 0.6 parea)))
+                  (progn (entdel region) (setq region nil))))))
+          (cond
+            (region
+             (setq rarea (dsld-rpr-poly-area-flat region))
+             ;; duplicate of something already traced?
+             (setq done nil)
+             (foreach pp traced
+               (if (and (not done) (entget (car pp))
+                        (dsld-rpr-pt-in-poly (list cx cy) (car pp))
+                        (< (abs (- (dsld-rpr-poly-area-flat (car pp))
+                                   rarea))
+                           (* 0.15 (max rarea 1.0))))
+                 (setq done T)))
+             (cond
+               (done (entdel region))
+               (T
+                (entmod (subst (cons 8 *DSLD-RPR-POLY-LAYER*)
+                               (assoc 8 (entget region))
+                               (entget region)))
+                (setq hpitch ppitch)
+                (foreach pk picks-info
+                  (if (and (car pk)
+                           (dsld-rpr-pt-in-poly (car pk) region))
+                    (setq hpitch (cadr pk))))
+                (dsld-rpr-tag-pitch region hpitch)
+                (dsld-rpr-tint-poly region)
+                (setq out (cons (list region hpitch) out))
+                (dsld-rpr-dbg
+                  (strcat "auto-dormer-bpoly: captured "
+                          (rtos rarea 2 0) " sqin at ("
+                          (rtos cx 2 0) "," (rtos cy 2 0) ") pitch "
+                          (rtos hpitch 2 1))))))))))))
+  (reverse out))
+
+;; Point-in-polygon for a RAW vertex list (ray cast; mirrors the
+;; entity-based dsld-rpr-pt-in-poly).
+(defun dsld-rpr-pt-in-poly-pts (pt pts / n i a b crossings x y)
+  (setq n (length pts) i 0 crossings 0)
+  (setq x (car pt) y (cadr pt))
+  (while (< i n)
+    (setq a (nth i pts) b (nth (rem (1+ i) n) pts))
+    (if (and (or (and (<= (cadr a) y) (> (cadr b) y))
+                 (and (<= (cadr b) y) (> (cadr a) y)))
+             (< x (+ (car a)
+                     (* (/ (- y (cadr a)) (- (cadr b) (cadr a)))
+                        (- (car b) (car a))))))
+      (setq crossings (1+ crossings)))
+    (setq i (1+ i)))
+  (= 1 (rem crossings 2)))
+
 ;; True if two closed polygons have overlapping INTERIORS (not merely a
 ;; shared edge or vertex).  Samples points strictly inside each polygon
 ;; -- its bbox-center and the midpoints from that center to each vertex
@@ -1862,14 +2159,19 @@
     (setq i (1+ i)))
   (setq candidates (reverse candidates))
 
-  ;; Phase 2: detect bell runs to exclude (drip-edge only).
+  ;; Phase 2: detect perimeter short-runs (bells and drip edge).
   (setq excluded (dsld-rpr-find-bell-segs candidates rafter-dir region))
 
-  ;; Phase 3: entmake every candidate that survived bell filtering.
+  ;; Phase 3: entmake the survivors.  v1.9.17: a flagged run only stays
+  ;; OUT when its piece is drip-edge tiny; substantial flagged pieces
+  ;; are BELL RAFTERS -- drawn (already split off the main rafters by
+  ;; clipping) so they get labels and chart counts like any lumber.
   (setq rafter-list '())
   (foreach c candidates
     (foreach seg (cadr c)
-      (if (not (member seg excluded))
+      (if (not (and (member seg excluded)
+                    (< (distance (car seg) (cadr seg))
+                       *DSLD-RPR-DRIP-MAX-LEN*)))
         (progn
           (setq new (entmakex
                       (list (cons 0 "LINE")
@@ -3415,7 +3717,7 @@
               shrunk kk perr hit orphan-picks rescued still-orphans
               rf capd ov-kept rescue-lays conflicts cf
               rp-pass rp-pending rp-next rp-kept-n diag-pairs
-              grp grps gpick pieces pc-ok tot-a rr-reg
+              grp grps gpick pieces pc-ok tot-a rr-reg auto-holes
               hidden-dashed scan-id scan-tuple roof-lay-filter *error*)
   (vl-load-com)
   ;; Version banner: reports MUST tell us which build actually ran
@@ -3947,6 +4249,51 @@
                       ".  RPRFIX changes it.")))))
   (setq orphan-picks (reverse still-orphans))
 
+  ;; --- auto-capture dashed dormer holes (v1.9.17) --------------------
+  ;; Runs while the dashed linework is still on the hidden temp layer
+  ;; (hidden-dashed pairs are live) and regions are final.  Closed
+  ;; dashed loops inside a traced region become sub-regions NOW, so the
+  ;; render loop below breaks the parent rafters around them without
+  ;; the user clicking anything.
+  (setq perr (vl-catch-all-apply
+               '(lambda ()
+                  (setq auto-holes (dsld-rpr-auto-dashed-holes
+                                     traced hidden-dashed picks-info)))))
+  (cond
+    ((vl-catch-all-error-p perr)
+     (setq *DSLD-RPR-LAST-REFRESH-ERR*
+           (strcat "auto-holes: " (vl-catch-all-error-message perr)))
+     (dsld-rpr-dbg (strcat "auto-holes ERROR: "
+                           (vl-catch-all-error-message perr))))
+    ((and auto-holes (> (length auto-holes) 0))
+     (setq traced (append traced auto-holes))))
+
+  ;; Pass 2: BPOLY per dashed cluster, dashes RESTORED for the traces
+  ;; (real dormers borrow the eave's solid line for one side, so the
+  ;; pure-dashed chain above can't close them).  Same restore/re-hide
+  ;; dance as the missed-area loop's pass 2b.
+  (setq perr
+    (vl-catch-all-apply
+      '(lambda ( / more)
+         (dsld-rpr-restore-visible hidden-dashed)
+         (setq more (dsld-rpr-auto-dormer-bpoly
+                      traced hidden-dashed picks-info roof-lay-filter))
+         (setq hidden-dashed (dsld-rpr-hide-non-solid-in-bbox p1 p2))
+         (dsld-rpr-stash 'hidden hidden-dashed)
+         (if more (setq auto-holes (append auto-holes more)))
+         (if more (setq traced (append traced more))))))
+  (if (vl-catch-all-error-p perr)
+    (progn
+      (setq *DSLD-RPR-LAST-REFRESH-ERR*
+            (strcat "auto-dormer-bpoly: "
+                    (vl-catch-all-error-message perr)))
+      (dsld-rpr-dbg (strcat "auto-dormer-bpoly ERROR: "
+                            (vl-catch-all-error-message perr)))))
+  (if (and auto-holes (> (length auto-holes) 0))
+    (princ (strcat "\n[RPR] Auto-captured " (itoa (length auto-holes))
+                   " dashed under-roof area(s) (dormers) -- rafters"
+                   " will break around them.")))
+
   ;; --- render everything for each polygon ----------------------------
   ;; process-single does fill + pitch label + rafters + length labels
   ;; internally.  (v1.8.0 fix: the explicit fill-region / label-pitch
@@ -4003,6 +4350,9 @@
   (dsld-rpr-restore-layers off-list)
   (dsld-rpr-render-chart p1 p2)
   (dsld-rpr-dbg "chart done; entering missed-area loop")
+
+  ;; slope outlines + chart + fills never plot (v1.9.17)
+  (vl-catch-all-apply 'dsld-rpr-apply-noplot)
 
   ;; --- arm live-edit NOW, before the interactive loop (v1.9.15) ------
   ;; The missed-area loop below prompts.  Esc at that prompt throws to
@@ -4583,11 +4933,14 @@
   (princ "        : button { key = \"act_area\";      label = \"RPRAREA\";      width = 14; fixed_width = true; }\n" f)
   (princ "        : button { key = \"act_fix\";       label = \"RPRFIX\";       width = 14; fixed_width = true; }\n" f)
   (princ "        : button { key = \"act_add\";       label = \"RPRADD\";       width = 14; fixed_width = true; }\n" f)
+  (princ "        : button { key = \"act_miss\";      label = \"RPRMISS\";      width = 14; fixed_width = true; }\n" f)
   (princ "      }\n" f)
   (princ "      : column {\n" f)
   (princ "        : button { key = \"act_calcpitch\"; label = \"RPRCALCPITCH\"; width = 14; fixed_width = true; }\n" f)
   (princ "        : button { key = \"act_show\";      label = \"RPRSHOW\";      width = 14; fixed_width = true; }\n" f)
   (princ "        : button { key = \"act_group\";     label = \"RPRGROUP\";     width = 14; fixed_width = true; }\n" f)
+  (princ "        : button { key = \"act_unstitch\";  label = \"RPRUNSTITCH\";  width = 14; fixed_width = true; }\n" f)
+  (princ "        : button { key = \"act_stitch\";    label = \"RPRSTITCH\";    width = 14; fixed_width = true; }\n" f)
   (princ "        : button { key = \"act_update\";    label = \"RPRUPDATE\";    width = 14; fixed_width = true; }\n" f)
   (princ "      }\n" f)
   (princ "    }\n" f)
@@ -4633,6 +4986,9 @@
      (dsld-rpr-wire "act_calcpitch" "RPRCALCPITCH")
      (dsld-rpr-wire "act_show"      "RPRSHOW")
      (dsld-rpr-wire "act_group"     "RPRGROUP")
+     (dsld-rpr-wire "act_miss"      "RPRMISS")
+     (dsld-rpr-wire "act_unstitch"  "RPRUNSTITCH")
+     (dsld-rpr-wire "act_stitch"    "RPRSTITCH")
      (dsld-rpr-wire "act_update"    "RPRUPDATE")
      (action_tile "close" "(done_dialog 0)")
      (start_dialog)
@@ -5101,7 +5457,19 @@
 
 ;; Weld pass: propagate every genuine vertex edit to the regions that
 ;; were attached there.  Returns the number of neighbour vertices moved.
+;;
+;; v1.9.17: gated by RPRUNSTITCH.  Stitching is what keeps the collinear
+;; overlap alive for H/R/V callouts, but sometimes a region must move
+;; ALONE (repositioning a mis-traced area, pulling a plane off a shared
+;; wall).  While unstitched, edits move only the touched region; the
+;; refresh still re-cuts rafters, and callouts on separated edges drop
+;; until the edges meet again.
 (defun dsld-rpr-weld-neighbors ( / events srcs ev welded)
+  (if *DSLD-RPR-UNSTITCHED*
+    (progn (dsld-rpr-dbg "weld: skipped (RPRUNSTITCH active)") 0)
+    (dsld-rpr-weld-neighbors-run)))
+
+(defun dsld-rpr-weld-neighbors-run ( / events srcs ev welded)
   (setq events (dsld-rpr-collect-edits))
   (setq srcs (mapcar 'car events))
   (setq welded 0)
@@ -5137,6 +5505,8 @@
      (setq *DSLD-RPR-REFRESHING* nil)
      ;; keep the weld snapshot current after every regeneration
      (vl-catch-all-apply 'dsld-rpr-vtx-snapshot)
+     ;; regenerated output must stay non-plotting (v1.9.17; idempotent)
+     (vl-catch-all-apply 'dsld-rpr-apply-noplot)
      (cond
        ((vl-catch-all-error-p e)
         ;; Persist the message: princ inside a reactor callback is easy
@@ -5242,6 +5612,44 @@
      (vl-catch-all-apply 'vlr-remove (list *DSLD-RPR-WATCH-REACTOR*))
      (setq *DSLD-RPR-WATCH-REACTOR* nil)
      (princ "\n[RPRUNWATCH] Stopped watching.  Run RPRREFRESH manually as needed.")))
+  (princ))
+
+;;-----------------------------------------------------------------------;;
+;; Stitch control:  RPRUNSTITCH / RPRSTITCH  (v1.9.17)
+;;-----------------------------------------------------------------------;;
+;; Adjacent regions are STITCHED: pulling a shared vertex drags every
+;; neighbour attached there, which keeps the collinear edge overlap the
+;; H/R/V callouts require.  RPRUNSTITCH suspends that so ONE region can
+;; be dragged or reshaped alone; RPRSTITCH re-arms it.  Rafters, fills
+;; and the chart keep live-updating either way -- only the neighbour-
+;; drag behavior changes.  Callouts on edges you separate while
+;; unstitched disappear on the next refresh (no overlap, no callout)
+;; and come back if the edges meet again.
+
+(defun c:RPRUNSTITCH ( )
+  (cond
+    (*DSLD-RPR-UNSTITCHED*
+     (princ "\n[RPRUNSTITCH] Already unstitched.  RPRSTITCH re-attaches."))
+    (T
+     (setq *DSLD-RPR-UNSTITCHED* T)
+     (princ "\n[RPRUNSTITCH] Regions UNSTITCHED -- edits move only the")
+     (princ "\n              region you touch.  H/R/V callouts on edges")
+     (princ "\n              you separate will drop until they meet again.")
+     (princ "\n              Run RPRSTITCH when you're done.")))
+  (princ))
+
+(defun c:RPRSTITCH ( )
+  (cond
+    ((not *DSLD-RPR-UNSTITCHED*)
+     (princ "\n[RPRSTITCH] Already stitched."))
+    (T
+     (setq *DSLD-RPR-UNSTITCHED* nil)
+     ;; fresh snapshot: everything the user moved while unstitched is
+     ;; the new baseline -- re-stitching must never replay those edits
+     ;; onto the neighbours.
+     (vl-catch-all-apply 'dsld-rpr-vtx-snapshot)
+     (princ "\n[RPRSTITCH] Regions stitched -- shared corners and edges")
+     (princ "\n            move together again.")))
   (princ))
 
 ;;-----------------------------------------------------------------------;;
@@ -5864,6 +6272,11 @@
               (itoa (length *DSLD-RPR-VTX-CACHE*))
               "0  <-- no snapshot: welding cannot run")))
   (dsld-rpr-diag-line
+    (strcat "  stitching : "
+            (if *DSLD-RPR-UNSTITCHED*
+              "OFF (RPRUNSTITCH active -- H/R/V loses separated edges)"
+              "on")))
+  (dsld-rpr-diag-line
     (strcat "  reentry flag : "
             (if *DSLD-RPR-REFRESHING*
               "T  <-- STUCK, refreshes are being suppressed" "nil (ok)")))
@@ -5945,6 +6358,8 @@
 (princ "\n      RPRSHOW      = show every SSS layer back on.")
 (princ "\n      RPREDIT      = unlock group select (AutoCAD grip edits).")
 (princ "\n      RPRGROUP     = re-lock click-selects-both.")
+(princ "\n      RPRUNSTITCH  = drag ONE region without neighbors following.")
+(princ "\n      RPRSTITCH    = re-attach regions (H/R/V needs stitching).")
 (princ "\n      RPRUNWATCH   = turn off live edit mode.")
 (princ "\n      RPRUPDATE    = fetch latest version from GitHub.")
 (princ "\n      RPRDIAG      = write a diagnostic report (send when reporting bugs).")

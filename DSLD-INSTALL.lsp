@@ -148,12 +148,21 @@
      (setq binfails 0)
      (foreach spec
        (list
+         ;; 2027 build (net10.0)
          (list "Contents/SchTagNet.dll"
                (strcat contents "\\SchTagNet.dll") 10000)
          (list "Contents/SchTagNet.deps.json"
                (strcat contents "\\SchTagNet.deps.json") 100)
          (list "Contents/SchTagNet.runtimeconfig.json"
-               (strcat contents "\\SchTagNet.runtimeconfig.json") 100))
+               (strcat contents "\\SchTagNet.runtimeconfig.json") 100)
+         ;; 2026 build (net8.0) - both are fetched on every seat and the
+         ;; loader NETLOADs only the one this AutoCAD can host
+         (list "Contents/SchTagNet-2026.dll"
+               (strcat contents "\\SchTagNet-2026.dll") 10000)
+         (list "Contents/SchTagNet-2026.deps.json"
+               (strcat contents "\\SchTagNet-2026.deps.json") 100)
+         (list "Contents/SchTagNet-2026.runtimeconfig.json"
+               (strcat contents "\\SchTagNet-2026.runtimeconfig.json") 100))
        (princ (strcat "\n[DSLD-INSTALL] downloading " (car spec) " ... "))
        (cond
          ((and (dsldi:download-binary (strcat *dsldi:raw-base* (car spec))

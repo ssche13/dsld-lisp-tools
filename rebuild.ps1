@@ -33,7 +33,27 @@ if ($dllChanged -and -not $ShipSchTagNet) {
     Copy-Item $devDll                                 $contents -Force
     Copy-Item "$schtag\SchTagNet.deps.json"           $contents -Force
     Copy-Item "$schtag\SchTagNet.runtimeconfig.json"  $contents -Force
-    Write-Host "Shipping updated SchTagNet build."
+    Write-Host "Shipping updated SchTagNet build (2027)."
+}
+
+# The 2026 build (net8.0) - separate project, same source. Ships under
+# the same guard: AutoCAD 2027 hosts .NET 10 and 2026 hosts .NET 8, so
+# a seat can only run one of the two and the loader picks by ACADVER.
+$schtag26 = "E:\Megans lisp routines\SchTagNet2026\bin\Release"
+$dev26    = Join-Path $schtag26 "SchTagNet-2026.dll"
+$repo26   = Join-Path $contents "SchTagNet-2026.dll"
+if (Test-Path $dev26) {
+    $changed26 = -not (Test-Path $repo26) -or
+                 (Get-FileHash $dev26 -Algorithm MD5).Hash -ne (Get-FileHash $repo26 -Algorithm MD5).Hash
+    if ($changed26 -and -not $ShipSchTagNet) {
+        Write-Host "NOTE: dev SchTagNet-2026.dll differs from the shipped copy - NOT shipping it." -ForegroundColor Yellow
+        Write-Host "      Rerun with -ShipSchTagNet once it has passed regression." -ForegroundColor Yellow
+    } elseif ($changed26) {
+        Copy-Item $dev26                                     $contents -Force
+        Copy-Item "$schtag26\SchTagNet-2026.deps.json"       $contents -Force
+        Copy-Item "$schtag26\SchTagNet-2026.runtimeconfig.json" $contents -Force
+        Write-Host "Shipping updated SchTagNet build (2026)."
+    }
 }
 
 # 2. release stamp - every drafter's loader GETs this tiny file once

@@ -28,8 +28,14 @@
 (setq *dsld:update-files* (cons "DSLD-Loader.lsp" *dsld:files*))
 ;; binary payloads (SchTagNet .NET schedule-tag add-in) - fetched
 ;; byte-exact, never through the text path
+;; TWO builds ship: AutoCAD 2027 hosts .NET 10, 2026 hosts .NET 8, and a
+;; net10.0 assembly cannot load on a .NET 8 runtime.  Distinct names so
+;; one build's .deps/.runtimeconfig cannot shadow the other's.  Every
+;; seat downloads both and NETLOADs only the one it can run (below).
 (setq *dsld:binfiles*
-  '("SchTagNet.dll" "SchTagNet.deps.json" "SchTagNet.runtimeconfig.json"))
+  '("SchTagNet.dll" "SchTagNet.deps.json" "SchTagNet.runtimeconfig.json"
+    "SchTagNet-2026.dll" "SchTagNet-2026.deps.json"
+    "SchTagNet-2026.runtimeconfig.json"))
 
 ;; The bundle's Contents folder: per-user install first, then the
 ;; all-users location.  nil when neither exists.
@@ -147,20 +153,27 @@
 ;; must never cost them the LISP tools.  The assembly can only load
 ;; once per session, so the blackboard flag (session-global, unlike
 ;; per-document lisp symbols) makes later drawings skip it.
-;; VERSION GATE: SchTagNet.dll in this bundle is the 2027 (net10.0)
-;; build - NETLOADing it on a 2026 (R25.x) seat fails against the
-;; wrong runtime.  A net8.0 build for 2026 exists but has not passed
-;; regression; when it ships, place it as Contents\SchTagNet-2026.dll
-;; (distinct name - its .deps/.runtimeconfig must not collide with the
-;; 2027 build's), add the R25 branch below, and extend the DSLDUPDATE
-;; and DSLD-INSTALL download lists.
+;; VERSION GATE: pick the build this AutoCAD can actually host.
+;;   ACADVER >= 26.0  = 2027, hosts .NET 10 -> SchTagNet.dll
+;;   ACADVER >= 25.1  = 2026, hosts .NET 8  -> SchTagNet-2026.dll
+;; Loading the wrong one fails against the wrong runtime, which is how a
+;; 2026 seat first hit this.  Anything older gets NO tag placer: the
+;; LISP tools still load, and that must never be at risk - a drafter
+;; without SCHTAG can still fill schedules.
+;; Both builds compile from ONE source (TagPlacer.cs is linked, not
+;; copied) and the 2027 build has passed the placement regression:
+;; placed=2 failed=0, tags on the SCH layer, re-run idempotent.
 (defun dsld:netload-schtagnet ( / dir ver dll)
   (if (null (vl-bb-ref 'dsld:netloaded))
     (progn
       (setq dir (dsld:dir)
             ver (atof (getvar "ACADVER")))
-      (if (and dir (>= ver 26.0)
-               (setq dll (findfile (strcat dir "\\SchTagNet.dll"))))
+      (if dir
+        (setq dll
+          (cond
+            ((>= ver 26.0) (findfile (strcat dir "\\SchTagNet.dll")))
+            ((>= ver 25.1) (findfile (strcat dir "\\SchTagNet-2026.dll"))))))
+      (if dll
         (progn
           (vl-catch-all-apply 'vl-cmdf (list "_.NETLOAD" dll))
           (vl-bb-set 'dsld:netloaded T)

@@ -83,6 +83,21 @@
      (vl-mkdir root)
      (vl-mkdir bundle)
      (vl-mkdir contents)
+     ;; register the bundle with SECURELOAD *before* anything loads
+     ;; from it, so the only security prompt the user ever sees is the
+     ;; one for this installer file itself.  Root before Contents (the
+     ;; root path is a substring of the Contents path, keeping the
+     ;; already-present check honest).  Fail-soft.
+     (vl-catch-all-apply
+       (function
+         (lambda ( / tp)
+           (foreach d (list bundle contents)
+             (setq tp (getvar "TRUSTEDPATHS"))
+             (if (null tp) (setq tp ""))
+             (if (null (vl-string-search (strcase d) (strcase tp)))
+               (setvar "TRUSTEDPATHS"
+                       (if (= tp "") d (strcat tp ";" d)))))))
+       nil)
      ;; (repo-path  target-path  sanity-token  min-length) - never
      ;; write an error page or truncated download over a working tool
      (setq specs

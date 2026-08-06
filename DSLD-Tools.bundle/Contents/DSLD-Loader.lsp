@@ -18,7 +18,7 @@
 ;;; ===================================================================
 (vl-load-com)
 
-(setq *dsld:bundle-version* "1.1.0")
+(setq *dsld:bundle-version* "1.1.1")
 (setq *dsld:raw-base*
   "https://raw.githubusercontent.com/ssche13/dsld-lisp-tools/main/DSLD-Tools.bundle/Contents/")
 (setq *dsld:files* '("roof-pitch-rafters.lsp" "SCH.lsp" "ADIM.lsp"))
@@ -54,6 +54,28 @@
           (vla-put-SupportPath files (strcat dir ";" sp)))))
     nil))
 
+;; Add one folder to TRUSTEDPATHS unless an entry already covers it.
+;; Root must be added BEFORE Contents: the root path is a substring of
+;; the Contents path, so the idempotency check stays correct.
+(defun dsld:trust-dir (dir / tp)
+  (setq tp (getvar "TRUSTEDPATHS"))
+  (if (null tp) (setq tp ""))
+  (if (null (vl-string-search (strcase dir) (strcase tp)))
+    (setvar "TRUSTEDPATHS" (if (= tp "") dir (strcat tp ";" dir)))))
+
+;; Register the bundle with SECURELOAD so the per-drawing loads never
+;; raise the security prompt.  TRUSTEDPATHS entries do not cover
+;; subfolders, so the bundle root and Contents both go in.  Persisted
+;; in the profile - after this runs once, every later session is
+;; prompt-free.  Fail-soft where the sysvar is absent (accoreconsole).
+(defun dsld:ensure-trusted (dir)
+  (vl-catch-all-apply
+    (function
+      (lambda ( )
+        (dsld:trust-dir (vl-filename-directory dir))
+        (dsld:trust-dir dir)))
+    nil))
+
 ;; Load one file from the bundle; nil on success, an error string on
 ;; failure so the caller can report every problem in one message.
 (defun dsld:load1 (dir name / p r)
@@ -71,6 +93,7 @@
     ((null dir)
      (princ "\n[DSLD] DSLD-Tools.bundle not found under ApplicationPlugins - nothing loaded."))
     (t
+     (dsld:ensure-trusted dir)
      (dsld:ensure-support-path dir)
      (foreach name *dsld:files*
        (if (setq e (dsld:load1 dir name)) (setq errs (cons e errs))))

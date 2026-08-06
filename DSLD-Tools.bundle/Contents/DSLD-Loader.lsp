@@ -18,7 +18,7 @@
 ;;; ===================================================================
 (vl-load-com)
 
-(setq *dsld:bundle-version* "1.2.0")
+(setq *dsld:bundle-version* "1.2.1")
 (setq *dsld:raw-base*
   "https://raw.githubusercontent.com/ssche13/dsld-lisp-tools/main/DSLD-Tools.bundle/Contents/")
 (setq *dsld:files* '("roof-pitch-rafters.lsp" "SCH.lsp" "ADIM.lsp"))
@@ -262,6 +262,12 @@
 ;; GET url and save the raw bytes to path (ADODB.Stream, so the DLL
 ;; arrives byte-exact).  T on success.  Fails when AutoCAD has the DLL
 ;; loaded and locked - caller reports "restart and rerun".
+;; CALL-STYLE MATTERS (field-verified): Open/Close must go through
+;; vlax-invoke - the typelib route rejects their omitted optional
+;; parameters ("too few actual parameters").  Write/SaveToFile must go
+;; through vlax-invoke-method - only the typelib route coerces the
+;; ResponseBody byte-array variant correctly (raw IDispatch mangles it
+;; and the stream saves 0 bytes).
 (defun dsld:download-binary (url path / xml ok)
   (vl-catch-all-apply
     (function
@@ -274,19 +280,19 @@
           (progn
             (setq stream (vlax-create-object "ADODB.Stream"))
             (vlax-put-property stream 'Type 1)      ; binary
-            (vlax-invoke-method stream 'Open)
+            (vlax-invoke stream 'Open)
             (vlax-invoke-method stream 'Write
               (vlax-get-property xml 'ResponseBody))
             (vlax-invoke-method stream 'SaveToFile path 2) ; overwrite
-            (vlax-invoke-method stream 'Close)
+            (vlax-invoke stream 'Close)
             (vlax-release-object stream)
             (setq ok T)))))
     nil)
   (if xml (vl-catch-all-apply 'vlax-release-object (list xml)))
   ok)
 
-(defun c:DSLDUPDATE ( / dir p url body rsize n-new n-same n-fail n-bin)
-  (setq n-new 0 n-same 0 n-fail 0 n-bin 0)
+(defun c:DSLDUPDATE ( / dir p url body rsize n-new n-same n-fail n-bin n-binfail)
+  (setq n-new 0 n-same 0 n-fail 0 n-bin 0 n-binfail 0)
   (setq dir (dsld:dir))
   (cond
     ((null dir) (princ "\n[DSLD] Bundle folder not found."))
@@ -326,7 +332,7 @@
        (cond
          ((null rsize)
           (princ "FETCH FAILED (no internet / GitHub unreachable?)")
-          (setq n-fail (1+ n-fail)))
+          (setq n-binfail (1+ n-binfail)))
          ((and (findfile p) (= rsize (vl-file-size p)))
           (princ "already up to date")
           (setq n-same (1+ n-same)))
@@ -335,17 +341,21 @@
           (setq n-bin (1+ n-bin)))
          (t
           (princ "write failed (AutoCAD is holding the add-in - restart CAD, then DSLDUPDATE again)")
-          (setq n-fail (1+ n-fail)))))
+          (setq n-binfail (1+ n-binfail)))))
      (if (> n-new 0) (dsld:load-all T))
      (princ (strcat "\n[DSLD] Update done: " (itoa (+ n-new n-bin)) " updated, "
-                    (itoa n-same) " current, " (itoa n-fail) " failed."))
+                    (itoa n-same) " current, " (itoa (+ n-fail n-binfail)) " failed."))
      (if (> n-new 0)
        (princ "\n[DSLD] New LISP code is live in THIS drawing; reopen other drawings to pick it up."))
      (if (> n-bin 0)
        (princ (strcat "\n[DSLD] SchTagNet add-in downloaded - it loads with the next drawing"
                       "\n       you open (restart first if an older copy was already in use).")))
-     ;; stamp last, and only after a clean run - a failed file keeps
-     ;; the stamp stale so the next session retries automatically
+     (if (> n-binfail 0)
+       (princ "\n[DSLD] Tag add-in files skipped - the LISP tools are unaffected; retried on the next release."))
+     ;; stamp when the LISP side ran clean.  Binary failures must NOT
+     ;; hold the stamp back: a seat that cannot fetch the optional
+     ;; add-in would re-run this whole update on every drawing open,
+     ;; forever.  Binaries retry at the next release or manual run.
      (if (= n-fail 0)
        (progn
          (setq body (dsld:http-get (strcat *dsld:raw-base* "release.txt")))

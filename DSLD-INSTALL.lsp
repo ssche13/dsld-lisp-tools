@@ -57,18 +57,22 @@
           (progn
             (setq stream (vlax-create-object "ADODB.Stream"))
             (vlax-put-property stream 'Type 1)      ; binary
-            (vlax-invoke-method stream 'Open)
+            ;; Open/Close via vlax-invoke (typelib rejects their
+            ;; omitted optionals); Write/SaveToFile via
+            ;; vlax-invoke-method (only the typelib route coerces the
+            ;; byte-array variant - raw IDispatch saves 0 bytes)
+            (vlax-invoke stream 'Open)
             (vlax-invoke-method stream 'Write
               (vlax-get-property xml 'ResponseBody))
             (vlax-invoke-method stream 'SaveToFile path 2) ; overwrite
-            (vlax-invoke-method stream 'Close)
+            (vlax-invoke stream 'Close)
             (vlax-release-object stream)
             (setq ok T)))))
     nil)
   (if xml (vl-catch-all-apply 'vlax-release-object (list xml)))
   ok)
 
-(defun dsldi:install ( / appdata root bundle contents specs body fails)
+(defun dsldi:install ( / appdata root bundle contents specs body fails binfails)
   (setq appdata (getenv "APPDATA"))
   (cond
     ((null appdata)
@@ -138,7 +142,10 @@
          (t
           (princ "WRITE FAILED (file in use?)")
           (setq fails (1+ fails)))))
-     ;; binary payloads: the SchTagNet schedule-tag add-in
+     ;; binary payloads: the SchTagNet schedule-tag add-in.  OPTIONAL
+     ;; on purpose - a failure here must never block the LISP tools
+     ;; (they are the install; the add-in retries via DSLDUPDATE).
+     (setq binfails 0)
      (foreach spec
        (list
          (list "Contents/SchTagNet.dll"
@@ -155,8 +162,8 @@
                (> (vl-file-size (cadr spec)) (caddr spec)))
           (princ "ok"))
          (t
-          (princ "FAILED")
-          (setq fails (1+ fails)))))
+          (princ "skipped (optional add-in)")
+          (setq binfails (1+ binfails)))))
      (cond
        ((> fails 0)
         (princ (strcat "\n[DSLD-INSTALL] " (itoa fails)
@@ -164,8 +171,9 @@
        (t
         (load (strcat contents "\\DSLD-Loader.lsp"))
         (princ "\n[DSLD-INSTALL] Done.  RPR / SCH / ADIM are live in THIS drawing now.")
-        (princ "\n[DSLD-INSTALL] Restart AutoCAD once and they will load in EVERY drawing")
-        (princ "\n               automatically (the SCHTAG tag placer needs that restart too).")
+        (princ "\n[DSLD-INSTALL] Restart AutoCAD once and they will load in EVERY drawing automatically.")
+        (if (> binfails 0)
+          (princ "\n[DSLD-INSTALL] (Tag add-in files were skipped - the tools above are unaffected;\n               the add-in arrives automatically with a later update.)"))
         (princ "\n[DSLD-INSTALL] You can delete the DSLD-INSTALL.lsp file - it is no longer needed.")))))
   (princ))
 

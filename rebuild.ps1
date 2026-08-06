@@ -4,6 +4,12 @@
 #
 # Run after editing any master:
 #   powershell -ExecutionPolicy Bypass -File E:\DSLD-Tools\rebuild.ps1
+#
+# SchTagNet GUARD: the dev bundle can hold an UNTESTED build (the SCH
+# chat holds DLLs until regression passes), so a changed DLL is NOT
+# shipped unless you explicitly opt in:
+#   ... rebuild.ps1 -ShipSchTagNet
+param([switch]$ShipSchTagNet)
 
 $ErrorActionPreference = "Stop"
 $root     = "E:\DSLD-Tools"
@@ -14,12 +20,21 @@ Copy-Item "E:\Megans RPR lisp\roof-pitch-rafters.lsp" $contents -Force
 Copy-Item "E:\Megans lisp routines\SCH.lsp"           $contents -Force
 Copy-Item "E:\ADIM lisp\ADIM.lsp"                     $contents -Force
 
-# SchTagNet (.NET schedule-tag add-in) - released builds live in the
-# dev bundle next to SCH.lsp
+# SchTagNet (.NET schedule-tag add-in) - dev builds ship only on
+# explicit request (see guard note above)
 $schtag = "E:\Megans lisp routines\SchTagNet.bundle\Contents"
-Copy-Item "$schtag\SchTagNet.dll"                     $contents -Force
-Copy-Item "$schtag\SchTagNet.deps.json"               $contents -Force
-Copy-Item "$schtag\SchTagNet.runtimeconfig.json"      $contents -Force
+$devDll = Join-Path $schtag "SchTagNet.dll"
+$repoDll = Join-Path $contents "SchTagNet.dll"
+$dllChanged = (Get-FileHash $devDll -Algorithm MD5).Hash -ne (Get-FileHash $repoDll -Algorithm MD5).Hash
+if ($dllChanged -and -not $ShipSchTagNet) {
+    Write-Host "NOTE: dev SchTagNet.dll differs from the shipped copy - NOT shipping it." -ForegroundColor Yellow
+    Write-Host "      Rerun with -ShipSchTagNet once it has passed regression." -ForegroundColor Yellow
+} elseif ($dllChanged) {
+    Copy-Item $devDll                                 $contents -Force
+    Copy-Item "$schtag\SchTagNet.deps.json"           $contents -Force
+    Copy-Item "$schtag\SchTagNet.runtimeconfig.json"  $contents -Force
+    Write-Host "Shipping updated SchTagNet build."
+}
 
 # 2. release stamp - every drafter's loader GETs this tiny file once
 #    per session and self-runs DSLDUPDATE when it changes.  Content

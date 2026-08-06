@@ -20,7 +20,7 @@
 -->
 <ApplicationPackage
   SchemaVersion="1.0"
-  AppVersion="1.2.0"
+  AppVersion="1.2.1"
   Author="DSLD"
   Name="DSLD Tools"
   Description="DSLD LISP tools: RPR roof pitch + rafters, SCH schedule of openings, ADIM auto-dimension"

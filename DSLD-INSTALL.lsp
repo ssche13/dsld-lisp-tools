@@ -116,7 +116,13 @@
                "(defun" 10000)
          (list "Contents/ADIM.lsp"
                (strcat contents "\\ADIM.lsp")
-               "(defun" 5000)))
+               "(defun" 5000)
+         ;; release stamp - having the current one locally stops the
+         ;; loader's auto-update from re-downloading everything on the
+         ;; very first session after this install
+         (list "Contents/release.txt"
+               (strcat contents "\\release.txt")
+               "" 4)))
      (setq fails 0)
      (foreach spec specs
        (princ (strcat "\n[DSLD-INSTALL] downloading " (car spec) " ... "))

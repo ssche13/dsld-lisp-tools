@@ -18,10 +18,14 @@
 ;;; ===================================================================
 (vl-load-com)
 
-(setq *dsld:bundle-version* "1.1.4")
+(setq *dsld:bundle-version* "1.2.0")
 (setq *dsld:raw-base*
   "https://raw.githubusercontent.com/ssche13/dsld-lisp-tools/main/DSLD-Tools.bundle/Contents/")
 (setq *dsld:files* '("roof-pitch-rafters.lsp" "SCH.lsp" "ADIM.lsp"))
+;; what DSLDUPDATE refreshes: the routines PLUS this loader itself
+;; (a newly downloaded loader takes effect on the next drawing - never
+;; (load)ed here, that would re-enter the file mid-execution)
+(setq *dsld:update-files* (cons "DSLD-Loader.lsp" *dsld:files*))
 ;; binary payloads (SchTagNet .NET schedule-tag add-in) - fetched
 ;; byte-exact, never through the text path
 (setq *dsld:binfiles*
@@ -287,7 +291,7 @@
   (cond
     ((null dir) (princ "\n[DSLD] Bundle folder not found."))
     (t
-     (foreach name *dsld:files*
+     (foreach name *dsld:update-files*
        (setq p (strcat dir "\\" name))
        (princ (strcat "\n[DSLD] " name " ... "))
        (setq body (dsld:http-get (strcat *dsld:raw-base* name)))
@@ -339,11 +343,44 @@
        (princ "\n[DSLD] New LISP code is live in THIS drawing; reopen other drawings to pick it up."))
      (if (> n-bin 0)
        (princ (strcat "\n[DSLD] SchTagNet add-in downloaded - it loads with the next drawing"
-                      "\n       you open (restart first if an older copy was already in use).")))))
+                      "\n       you open (restart first if an older copy was already in use).")))
+     ;; stamp last, and only after a clean run - a failed file keeps
+     ;; the stamp stale so the next session retries automatically
+     (if (= n-fail 0)
+       (progn
+         (setq body (dsld:http-get (strcat *dsld:raw-base* "release.txt")))
+         (if body (dsld:write-file (strcat dir "\\release.txt") body))))))
   (princ))
+
+;; Once per session, compare the published release stamp against the
+;; local copy; on any difference run DSLDUPDATE automatically.  This
+;; is what makes a release zero-touch for drafters: the maintainer
+;; runs rebuild.ps1, and every seat picks the new code up on its next
+;; drawing open.  The stamp is a few bytes, so the per-session cost is
+;; one tiny HTTP GET (2 s timeout, fail-soft offline).
+(defun dsld:auto-update ( / dir remote local)
+  (if (null (vl-bb-ref 'dsld:autochecked))
+    (progn
+      (vl-bb-set 'dsld:autochecked T)
+      (setq dir (dsld:dir))
+      (if dir
+        (progn
+          (setq remote (dsld:http-get (strcat *dsld:raw-base* "release.txt")))
+          (if remote
+            (progn
+              (setq remote (vl-string-trim " \t\r\n" remote)
+                    local  (vl-string-trim " \t\r\n"
+                             (dsld:read-file (strcat dir "\\release.txt"))))
+              (if (and (> (strlen remote) 0)
+                       (< (strlen remote) 100)
+                       (/= remote local))
+                (progn
+                  (princ "\n[DSLD] New release published - updating automatically...")
+                  (c:DSLDUPDATE))))))))))
 
 (defun c:DSLDRELOAD ( ) (dsld:load-all T))
 
 ;; run at load time - fired by the acaddoc.lsp hook in every drawing
 ;; (and by the AutoLoader / installer, whichever comes first)
 (dsld:load-all nil)
+(dsld:auto-update)

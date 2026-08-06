@@ -21,7 +21,24 @@ Copy-Item "$schtag\SchTagNet.dll"                     $contents -Force
 Copy-Item "$schtag\SchTagNet.deps.json"               $contents -Force
 Copy-Item "$schtag\SchTagNet.runtimeconfig.json"      $contents -Force
 
-# 2. re-zip the EMAIL FALLBACK - LISP-only on purpose. Mail filters
+# 2. release stamp - every drafter's loader GETs this tiny file once
+#    per session and self-runs DSLDUPDATE when it changes.  Content
+#    hash (not a timestamp) so a rebuild that changes nothing does not
+#    make every seat re-download.
+$stampSrc = @(
+    (Join-Path $contents "DSLD-Loader.lsp"),
+    (Join-Path $contents "roof-pitch-rafters.lsp"),
+    (Join-Path $contents "SCH.lsp"),
+    (Join-Path $contents "ADIM.lsp"),
+    (Join-Path $contents "SchTagNet.dll"),
+    (Join-Path $root "DSLD-Tools.bundle\PackageContents.xml")
+)
+$concat = ($stampSrc | ForEach-Object { (Get-FileHash $_ -Algorithm MD5).Hash }) -join ""
+$md5 = [System.Security.Cryptography.MD5]::Create()
+$stamp = ([System.BitConverter]::ToString($md5.ComputeHash([Text.Encoding]::ASCII.GetBytes($concat))) -replace '-','')
+Set-Content -Path (Join-Path $contents "release.txt") -Value $stamp -Encoding Ascii
+
+# 3. re-zip the EMAIL FALLBACK - LISP-only on purpose. Mail filters
 #    (Gmail and most corporate gateways) block .dll even inside
 #    archives, so SchTagNet is deliberately excluded here; it reaches
 #    zip-installed machines via their first DSLDUPDATE instead.
@@ -37,12 +54,12 @@ Copy-Item (Join-Path $root "README.txt") $stage
 Compress-Archive -Path "$stage\DSLD-Tools.bundle", "$stage\README.txt" -DestinationPath $zip
 Remove-Item $stage -Recurse -Force
 
-# 3. refresh the local install
+# 4. refresh the local install
 $dest = Join-Path $env:APPDATA "Autodesk\ApplicationPlugins"
 if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Force $dest | Out-Null }
 Copy-Item (Join-Path $root "DSLD-Tools.bundle") $dest -Recurse -Force
 
-# 4. publish to GitHub (only when something actually changed)
+# 5. publish to GitHub (only when something actually changed)
 git -C $root add -A
 git -C $root diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {

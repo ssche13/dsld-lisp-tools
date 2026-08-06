@@ -10,14 +10,17 @@
           Contents\DSLD-Loader.lsp   (+ the three routine .lsp files)
 
   AutoCAD scans ApplicationPlugins at startup and loads the LISP module
-  below into every drawing, exactly like the Startup Suite.  Platform /
-  Series values match the Autodesk-shipped bundles on this machine:
-  R26.0 = AutoCAD 2027, ADT = AutoCAD Architecture.  SeriesMax is set
-  high so future upgrades keep loading the tools.
+  below into every drawing, exactly like the Startup Suite.  Platform
+  values match the Autodesk-shipped bundles on this machine (ADT =
+  AutoCAD Architecture).  SERIES RANGE MATTERS: office seats run BOTH
+  ACA 2026 (R25.1) and 2027 (R26.0) - SeriesMin must stay at or below
+  R25.0 or the AutoLoader silently skips the whole package on 2026
+  seats (that outage looked exactly like "nothing loads after
+  restart").  SeriesMax is set high so future upgrades keep loading.
 -->
 <ApplicationPackage
   SchemaVersion="1.0"
-  AppVersion="1.1.3"
+  AppVersion="1.1.4"
   Author="DSLD"
   Name="DSLD Tools"
   Description="DSLD LISP tools: RPR roof pitch + rafters, SCH schedule of openings, ADIM auto-dimension"
@@ -28,7 +31,7 @@
 
   <RuntimeRequirements
       Platform="AutoCAD|ADT"
-      SeriesMin="R26.0"
+      SeriesMin="R25.0"
       SeriesMax="R30.0"
       OS="Win64"
       SupportPath="./Contents" />

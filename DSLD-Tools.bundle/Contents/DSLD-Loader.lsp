@@ -18,7 +18,7 @@
 ;;; ===================================================================
 (vl-load-com)
 
-(setq *dsld:bundle-version* "1.1.3")
+(setq *dsld:bundle-version* "1.1.4")
 (setq *dsld:raw-base*
   "https://raw.githubusercontent.com/ssche13/dsld-lisp-tools/main/DSLD-Tools.bundle/Contents/")
 (setq *dsld:files* '("roof-pitch-rafters.lsp" "SCH.lsp" "ADIM.lsp"))
@@ -143,11 +143,20 @@
 ;; must never cost them the LISP tools.  The assembly can only load
 ;; once per session, so the blackboard flag (session-global, unlike
 ;; per-document lisp symbols) makes later drawings skip it.
-(defun dsld:netload-schtagnet ( / dir dll)
+;; VERSION GATE: SchTagNet.dll in this bundle is the 2027 (net10.0)
+;; build - NETLOADing it on a 2026 (R25.x) seat fails against the
+;; wrong runtime.  A net8.0 build for 2026 exists but has not passed
+;; regression; when it ships, place it as Contents\SchTagNet-2026.dll
+;; (distinct name - its .deps/.runtimeconfig must not collide with the
+;; 2027 build's), add the R25 branch below, and extend the DSLDUPDATE
+;; and DSLD-INSTALL download lists.
+(defun dsld:netload-schtagnet ( / dir ver dll)
   (if (null (vl-bb-ref 'dsld:netloaded))
     (progn
-      (setq dir (dsld:dir))
-      (if (and dir (setq dll (findfile (strcat dir "\\SchTagNet.dll"))))
+      (setq dir (dsld:dir)
+            ver (atof (getvar "ACADVER")))
+      (if (and dir (>= ver 26.0)
+               (setq dll (findfile (strcat dir "\\SchTagNet.dll"))))
         (progn
           (vl-catch-all-apply 'vl-cmdf (list "_.NETLOAD" dll))
           (vl-bb-set 'dsld:netloaded T)

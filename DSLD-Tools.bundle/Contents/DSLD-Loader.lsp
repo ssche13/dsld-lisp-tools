@@ -18,7 +18,7 @@
 ;;; ===================================================================
 (vl-load-com)
 
-(setq *dsld:bundle-version* "1.1.1")
+(setq *dsld:bundle-version* "1.1.2")
 (setq *dsld:raw-base*
   "https://raw.githubusercontent.com/ssche13/dsld-lisp-tools/main/DSLD-Tools.bundle/Contents/")
 (setq *dsld:files* '("roof-pitch-rafters.lsp" "SCH.lsp" "ADIM.lsp"))
@@ -87,6 +87,22 @@
      (if (vl-catch-all-error-p r)
        (strcat name ": " (vl-catch-all-error-message r))))))
 
+;; NETLOAD the SchTagNet tag placer when its DLL is present.  Optional
+;; on purpose: machines installed from the LISP-only zip or the pre-1.1
+;; email installer have no DLL until their first DSLDUPDATE, and that
+;; must never cost them the LISP tools.  The assembly can only load
+;; once per session, so the blackboard flag (session-global, unlike
+;; per-document lisp symbols) makes later drawings skip it.
+(defun dsld:netload-schtagnet ( / dir dll)
+  (if (null (vl-bb-ref 'dsld:netloaded))
+    (progn
+      (setq dir (dsld:dir))
+      (if (and dir (setq dll (findfile (strcat dir "\\SchTagNet.dll"))))
+        (progn
+          (vl-catch-all-apply 'vl-cmdf (list "_.NETLOAD" dll))
+          (vl-bb-set 'dsld:netloaded T)
+          (princ "\n[DSLD] SchTagNet tag placer loaded (SCHTAG commands)."))))))
+
 (defun dsld:load-all ( / dir errs e)
   (setq dir (dsld:dir))
   (cond
@@ -97,6 +113,23 @@
      (dsld:ensure-support-path dir)
      (foreach name *dsld:files*
        (if (setq e (dsld:load1 dir name)) (setq errs (cons e errs))))
+     ;; NETLOAD is a command, so it must wait for S::STARTUP - this
+     ;; file runs while the document is still loading, where command
+     ;; calls are unsafe.  Hook once per document.
+     (if (null *dsld:startup-hooked*)
+       (progn
+         (setq *dsld:startup-hooked* T)
+         (cond
+           ((= (type S::STARTUP) 'LIST)
+            (setq S::STARTUP
+              (append S::STARTUP '((dsld:netload-schtagnet)))))
+           (S::STARTUP
+            (setq *dsld:old-startup* S::STARTUP)
+            (defun-q S::STARTUP ( )
+              (*dsld:old-startup*)
+              (dsld:netload-schtagnet)))
+           (t
+            (defun-q S::STARTUP ( ) (dsld:netload-schtagnet))))))
      ;; SCH.lsp resets *sch:home* to its dev path on every load; point
      ;; its self-updater at the copy that is actually running.
      (setq *sch:home* (strcat dir "\\SCH.lsp"))
@@ -239,7 +272,8 @@
      (if (> n-new 0)
        (princ "\n[DSLD] New LISP code is live in THIS drawing; reopen other drawings to pick it up."))
      (if (> n-bin 0)
-       (princ "\n[DSLD] SchTagNet add-in updated - it takes effect after the next AutoCAD restart."))))
+       (princ (strcat "\n[DSLD] SchTagNet add-in downloaded - it loads with the next drawing"
+                      "\n       you open (restart first if an older copy was already in use).")))))
   (princ))
 
 (defun c:DSLDRELOAD ( ) (dsld:load-all))

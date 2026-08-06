@@ -42,7 +42,7 @@
 ;;; Configuration
 ;;; ------------------------------------------------------------------
 
-(setq *sch:version* "2.10")
+(setq *sch:version* "2.13")
 (setq *sch:layer* "SCH")          ; layer for charts SCH creates
 (setq *sch:home* "E:/Megans lisp routines/SCH.lsp") ; default install path
 (setq *sch:raw-base*
@@ -1178,11 +1178,24 @@
                     "x"
                     (if (sch:rget r "HIN")
                       (rtos (sch:rget r "HIN") 2 1) "?"))))
-              (strcat "?" sz "|"
-                      (if (sch:rget r "STYLE") (sch:rget r "STYLE") "")
-                      "|"
-                      (if (sch:rget r "CASED") "C" "")
-                      (if (sch:rget r "WALL") (sch:rget r "WALL") ""))))))
+              ;; WINDOWS group on SIZE ALONE (drafter rule 2026-08-05):
+              ;; the same size window is the same window no matter what
+              ;; wall type it sits in or which run of wall it is on, so
+              ;; style and wall class must NOT split the group. Doors
+              ;; still key on style + wall, because a hollow-core and an
+              ;; exterior door of one size are different products, and a
+              ;; cased opening carries its 4"/6" host-wall size.
+              ;; (Window TYPES within a size get separated later by the
+              ;; elevation step, then confirmed from the description
+              ;; drop-down.)
+              (if (= (sch:rget r "KIND") "WINDOW")
+                (strcat "?" sz)
+                (strcat "?" sz "|"
+                        (if (sch:rget r "STYLE") (sch:rget r "STYLE") "")
+                        "|"
+                        (if (sch:rget r "CASED") "C" "")
+                        (if (sch:rget r "WALL")
+                          (sch:rget r "WALL") "")))))))
 
 (defun sch:aggregate (recs kind / groups key g out mark win hin qty lh rh
                         cased wall code notes sty mlt meas)
@@ -1913,6 +1926,14 @@
                              (nth 5 p) " LH / " (nth 6 p) " RH"))))
             (if desc
               (sch:tbl-set tbl rowidx (sch:col info "DESCRIPTION") desc))
+            ;; DESCRIPTION reads LEFT-justified (drafter 2026-08-05).
+            ;; sch:make-table sets this when it BUILDS a chart, but rows
+            ;; appended later inherit the table default (centred), so
+            ;; every row SCH writes gets it set here - appended, spare
+            ;; or pre-existing alike.
+            (sch:catch 'vlax-invoke
+              (list tbl 'SetCellAlignment rowidx
+                    (sch:col info "DESCRIPTION") 4))   ; 4 = middle-left
             (setq written (1+ written)))))))
   written)
 
@@ -1931,6 +1952,20 @@
     (princ))
   (princ (strcat "\n[SCH v" *sch:version* "]"))
   (sch:trace-init)
+  ;; VERSION SAFETY (2026-08-05). The AecX COM bridge talks to
+  ;; AecX.AecScheduleApplication - ACA-version-specific COM, the same
+  ;; class of hazard that forced *sch:use-explode* off in v2.9 after it
+  ;; hard-crashed AutoCAD. It is verified only on ACA 2027 (ACADVER 26).
+  ;; On any other version, default it OFF rather than risk taking the
+  ;; drafter's session down: SCH then reads sizes from geometry and the
+  ;; TK_ tag blocks instead, which is the path BricsCAD already uses.
+  ;; Set *sch:use-aecx* to T by hand after this loads to force it on.
+  (if (and *sch:use-aecx* (/= (sch:acad-major) 26))
+    (progn
+      (setq *sch:use-aecx* nil)
+      (princ (strcat "\n[SCH] AutoCAD " (getvar "ACADVER")
+                     " is not the verified version (2027) - the AecX property-set"))
+      (princ "\n[SCH] bridge is OFF for safety. Sizes come from geometry/tags instead.")))
   (sch:tr (strcat "gates: aecx=" (if *sch:use-aecx* "ON" "OFF")
                   "  explode=" (if *sch:use-explode* "ON" "OFF")))
   (setq oldecho (getvar "CMDECHO"))
@@ -2769,11 +2804,28 @@
     (strcat (sch:slash app)
             "/Autodesk/ApplicationPlugins/SchTagNet.bundle")))
 
+;; The callout add-in is COMPILED against AutoCAD 2027 (acmgd 26.0,
+;; .NET 10). An older AutoCAD cannot load it - the assembly versions
+;; do not match - so installing it there only produces a confusing
+;; error later. Refuse up front and say why. ACADVER looks like
+;; "26.0s (LMS Tech)"; 26 = 2027.
+(defun sch:acad-major ( / v i c out)
+  (setq v (getvar "ACADVER") out "" i 1)
+  (while (and v (<= i (strlen v))
+              (wcmatch (setq c (substr v i 1)) "#"))
+    (setq out (strcat out c) i (1+ i)))
+  (if (= out "") 0 (atoi out)))
+
 (defun c:SCHTAGINSTALL ( / src dst ok bad pair from to)
   (princ (strcat "\n[SCH v" *sch:version* "] installing the callout add-in"))
   (setq src (sch:tagbundle-src)
         dst (sch:tagbundle-dst))
   (cond
+    ((< (sch:acad-major) 26)
+     (princ (strcat "\n[SCH] The callout add-in needs AutoCAD Architecture 2027 or newer"
+                    " - this is " (getvar "ACADVER") "."))
+     (princ "\n[SCH] Nothing installed. SCH itself (schedules, SCHDIAG, SCHCHECK) works fine on this version;")
+     (princ "\n[SCH] only the SCHTAG callout commands require 2027."))
     ((null src)
      (princ "\n[SCH] Cannot locate SCH.lsp, so cannot find the add-in beside it."))
     ((null dst)

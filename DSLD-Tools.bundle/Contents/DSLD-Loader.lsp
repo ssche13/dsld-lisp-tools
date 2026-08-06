@@ -18,7 +18,7 @@
 ;;; ===================================================================
 (vl-load-com)
 
-(setq *dsld:bundle-version* "1.1.2")
+(setq *dsld:bundle-version* "1.1.3")
 (setq *dsld:raw-base*
   "https://raw.githubusercontent.com/ssche13/dsld-lisp-tools/main/DSLD-Tools.bundle/Contents/")
 (setq *dsld:files* '("roof-pitch-rafters.lsp" "SCH.lsp" "ADIM.lsp"))
@@ -87,6 +87,56 @@
      (if (vl-catch-all-error-p r)
        (strcat name ": " (vl-catch-all-error-message r))))))
 
+(defun dsld:slash (s) (vl-string-translate "\\" "/" s))
+
+;; the acaddoc.lsp already on the support search path, else a fresh
+;; one under the roamable Support folder (same resolution SCHINSTALL
+;; used, so both mechanisms always act on the SAME file)
+(defun dsld:acaddoc-target ( / tgt dir)
+  (setq tgt (findfile "acaddoc.lsp"))
+  (if (null tgt)
+    (progn
+      (setq dir (strcat (getvar "ROAMABLEROOTPREFIX") "Support"))
+      (vl-mkdir dir)
+      (setq tgt (strcat dir "\\acaddoc.lsp"))))
+  tgt)
+
+;; Guarantee per-drawing loading via acaddoc.lsp, which AutoCAD loads
+;; in EVERY document.  The plug-in AutoLoader is only reliable for
+;; LISP once at startup - on some machines the tools appeared in the
+;; first session and vanished after a restart.  Marker-based and
+;; self-repairing: stale or duplicate entries are collapsed to exactly
+;; one absolute-path, findfile-guarded load line.  No-op (not even a
+;; write) when the file is already correct.
+(defun dsld:ensure-acaddoc-hook (dir)
+  (vl-catch-all-apply
+    (function
+      (lambda ( / tgt mark loadline f line lines out skipnext)
+        (setq tgt  (dsld:acaddoc-target)
+              mark ";; DSLD-AUTOLOAD (added by DSLD-Tools; loads the tools in every drawing)"
+              loadline (strcat "(if (findfile \"" (dsld:slash dir)
+                               "/DSLD-Loader.lsp\") (load \""
+                               (dsld:slash dir) "/DSLD-Loader.lsp\" nil))"))
+        (if (setq f (open tgt "r"))
+          (progn (while (setq line (read-line f))
+                   (setq lines (cons line lines)))
+                 (close f)))
+        (setq lines (reverse lines))
+        (foreach line lines
+          (cond
+            (skipnext (setq skipnext nil))
+            ((wcmatch line "*DSLD-AUTOLOAD*") (setq skipnext T))
+            (t (setq out (cons line out)))))
+        (setq out (reverse out))
+        (if (not (equal lines (append out (list mark loadline))))
+          (if (setq f (open tgt "w"))
+            (progn
+              (foreach line out (write-line line f))
+              (write-line mark f)
+              (write-line loadline f)
+              (close f))))))
+    nil))
+
 ;; NETLOAD the SchTagNet tag placer when its DLL is present.  Optional
 ;; on purpose: machines installed from the LISP-only zip or the pre-1.1
 ;; email installer have no DLL until their first DSLDUPDATE, and that
@@ -103,14 +153,21 @@
           (vl-bb-set 'dsld:netloaded T)
           (princ "\n[DSLD] SchTagNet tag placer loaded (SCHTAG commands)."))))))
 
-(defun dsld:load-all ( / dir errs e)
+;; force nil: skip when this document already loaded the tools (the
+;; acaddoc.lsp hook AND the bundle can both fire in one document -
+;; parsing ~460 KB of LISP twice per drawing is pure waste).  force T
+;; (DSLDRELOAD, post-update) always reloads.
+(defun dsld:load-all (force / dir errs e)
   (setq dir (dsld:dir))
   (cond
+    ((and *dsld:loaded-this-doc* (null force)) nil)
     ((null dir)
      (princ "\n[DSLD] DSLD-Tools.bundle not found under ApplicationPlugins - nothing loaded."))
     (t
+     (setq *dsld:loaded-this-doc* T)
      (dsld:ensure-trusted dir)
      (dsld:ensure-support-path dir)
+     (dsld:ensure-acaddoc-hook dir)
      (foreach name *dsld:files*
        (if (setq e (dsld:load1 dir name)) (setq errs (cons e errs))))
      ;; NETLOAD is a command, so it must wait for S::STARTUP - this
@@ -266,7 +323,7 @@
          (t
           (princ "write failed (AutoCAD is holding the add-in - restart CAD, then DSLDUPDATE again)")
           (setq n-fail (1+ n-fail)))))
-     (if (> n-new 0) (dsld:load-all))
+     (if (> n-new 0) (dsld:load-all T))
      (princ (strcat "\n[DSLD] Update done: " (itoa (+ n-new n-bin)) " updated, "
                     (itoa n-same) " current, " (itoa n-fail) " failed."))
      (if (> n-new 0)
@@ -276,7 +333,8 @@
                       "\n       you open (restart first if an older copy was already in use).")))))
   (princ))
 
-(defun c:DSLDRELOAD ( ) (dsld:load-all))
+(defun c:DSLDRELOAD ( ) (dsld:load-all T))
 
-;; run at load time - the AutoLoader executes this file in each drawing
-(dsld:load-all)
+;; run at load time - fired by the acaddoc.lsp hook in every drawing
+;; (and by the AutoLoader / installer, whichever comes first)
+(dsld:load-all nil)

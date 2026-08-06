@@ -68,6 +68,9 @@ $stampSrc = @(
     (Join-Path $contents "SchTagNet.dll"),
     (Join-Path $root "DSLD-Tools.bundle\PackageContents.xml")
 )
+# the 2026 build joins the stamp only once it exists in the bundle
+$dll26 = Join-Path $contents "SchTagNet-2026.dll"
+if (Test-Path $dll26) { $stampSrc += $dll26 }
 $concat = ($stampSrc | ForEach-Object { (Get-FileHash $_ -Algorithm MD5).Hash }) -join ""
 $md5 = [System.Security.Cryptography.MD5]::Create()
 $stamp = ([System.BitConverter]::ToString($md5.ComputeHash([Text.Encoding]::ASCII.GetBytes($concat))) -replace '-','')
